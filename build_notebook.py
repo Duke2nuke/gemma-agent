@@ -82,13 +82,13 @@ variance that flipped run 1 (5/5) to run 2 (1/10) with identical settings.
 
 **Model:** `google/gemma-4-e4b-it-qat-w4a16-ct` — the QAT 4-bit E4B
 checkpoint. Only the QAT variants are permitted submission models, so the
-bf16 checkpoint is NOT used. The 4-bit weights (~4.5 GB) load easily on
-Kaggle's 2x T4 with `device_map="auto"`. This is the small-model bonus lane
-($10,000 for E2B/E4B; small-model entries stay eligible for the main
-leaderboard). NOTE: the kagglehub handle below,
-`google/gemma-4/transformers/e4b-it-qat-w4a16-ct`, follows the pattern of
-the bf16 handle and is not yet confirmed on Kaggle — if kagglehub fails,
-the Hugging Face fallback loads the same checkpoint by its HF id.
+bf16 checkpoint is NOT used. NOTE: the kagglehub handle is
+`google/gemma-4/Other/gemma-4-e4b-it-qat-w4a16-ct` (the "Other"
+framework, confirmed 26 Nov from the Kaggle model page — the
+"transformers" handle 404s). The checkpoint is the full multimodal
+Gemma4ForConditionalGeneration model, so the load uses
+`attn_implementation="eager"` — its audio sub-model does not support
+SDPA (that was the 23:21 ValueError).
 
 **Before running:**
 0. If you already ran an earlier version of this notebook in this
@@ -152,10 +152,10 @@ if _P("/kaggle/input").exists():
 if model_path is None:
     try:
         import kagglehub
-        # Handle follows the bf16 pattern; unconfirmed on Kaggle — the HF
-        # fallback below loads the same checkpoint if this fails.
+        # Confirmed 26 Nov from the Kaggle model page: the QAT checkpoint
+        # is under the "Other" framework, variant gemma-4-e4b-it-qat-w4a16-ct.
         model_path = kagglehub.model_download(
-            "google/gemma-4/transformers/e4b-it-qat-w4a16-ct"
+            "google/gemma-4/Other/gemma-4-e4b-it-qat-w4a16-ct"
         )
         print("downloaded via kagglehub:", model_path)
     except Exception as e:
@@ -169,7 +169,11 @@ model = AutoModelForCausalLM.from_pretrained(
     # ~18 GB and the generate call OOMs on a T4. Let compressed-tensors
     # load the checkpoint in native 4-bit.
     device_map="auto",
-    attn_implementation="sdpa",  # eager attention uses far more memory
+    # MUST be eager: Gemma4AudioModel (part of the full multimodal
+    # Gemma4ForConditionalGeneration checkpoint) does not support SDPA —
+    # transformers raises ValueError and tells you to use eager instead
+    # (huggingface/transformers#28005). SDPA was the 23:21 crash.
+    attn_implementation="eager",
     low_cpu_mem_usage=True,
 )
 model.eval()
