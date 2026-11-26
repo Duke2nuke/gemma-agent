@@ -8,7 +8,7 @@ Aarambh joined both the main track and the paper track.
 
 ## What this is
 
-A baseline agent loop over 5 small, real bugs. The agent reads the buggy
+A baseline agent loop over 10 small, real bugs. The agent reads the buggy
 file, asks Gemma 4 E4B for a fix, edits the file, runs the tests, and retries
 up to 3 times. No API calls — the model runs locally on the Kaggle GPU.
 
@@ -23,14 +23,19 @@ leaderboard and the paper track).
 | --- | --- |
 | `gemma_agent.ipynb` | The Kaggle notebook. Self-contained: its setup cell writes `agent.py` + `bugs/` into `/kaggle/working` and imports `agent`. |
 | `agent.py` | The agent loop as a plain module (model-agnostic: takes a `generate` callable). Same code the notebook uses. |
-| `bugs/` | 5 buggy files + `tests/` with one test file per bug. Each test file fails before the fix and passes after. |
+| `bugs/` | 10 buggy files + `tests/` with one test file per bug. Each test file fails before the fix and passes after. |
 | `build_notebook.py` | Regenerates `gemma_agent.ipynb` from `agent.py` + `bugs/` (single source of truth). Run it after editing either. |
 | `baseline_results.md` | Empty results table. Fill it in from a real Kaggle run. |
 
-The 5 bugs: off-by-one (`total` misses the last number), wrong comparison
+The 10 bugs: off-by-one (`total` misses the last number), wrong comparison
 (`is_adult` uses `>` instead of `>=`), mutable default arg (`add_item`
 shares one list), missing dict key (`get_price` raises `KeyError`), wrong
-sort (`top_scores` returns the 3 lowest instead of the 3 highest).
+sort (`top_scores` returns the 3 lowest instead of the 3 highest), a str/int
+type error (`final_price` multiplies a string price), a missing import
+(`get_setting` uses `json` without importing it), shared mutable state
+(`evens` accumulates into a module-level list), a slicing off-by-one
+(`page` drops the last item of each page), and input mutation (`with_bonus`
+changes the list it was given).
 
 ## How to run it on Kaggle
 
@@ -41,22 +46,24 @@ sort (`top_scores` returns the 3 lowest instead of the 3 highest).
 3. Upload `gemma_agent.ipynb` (File → Import notebook, or copy-paste the
    cells). Run all cells top to bottom.
 4. The model download takes ~2–3 min on first run. The agent run itself
-   takes a few minutes (5 bugs × up to 3 attempts).
+   takes a few minutes (10 bugs × up to 3 attempts).
 5. Copy the printed table and the generated `baseline_results.md` back into
    this repo.
 
 ## What the baseline measures
 
 Per bug: **pass/fail** and **attempts used** (max 3). Pass rate is
-`passed / 5`. Nothing here has been run on a GPU yet — the table in
-`baseline_results.md` is empty until the first Kaggle run.
+`passed / 10`. The first 5 bugs have a real Kaggle baseline (5/5, 26 Nov
+2026, Gemma E4B on 2x T4); the 5 harder bugs have no baseline yet — run
+them on Kaggle and add a second table to `baseline_results.md`.
 
 ## Verified locally (no GPU, no model)
 
 - `python -m py_compile` passes on every `.py` file.
-- All 5 buggy test files fail before the fix; all 15 tests pass after the
-  reference fixes.
-- The agent loop goes 5/5 with a fake model that returns the reference fix
+- Every buggy test file fails before the fix (24 of 30 tests fail; the 6
+  that pass on buggy code are ones that do not touch the bug); all 30 tests
+  pass after the reference fixes.
+- The agent loop goes 10/10 with a fake model that returns the reference fix
   (validates the loop logic, not the model).
 - The notebook passes `nbformat.validate` with no warnings.
 

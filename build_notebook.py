@@ -83,8 +83,10 @@ the official `google/gemma-4-qat-q4-0` collection on Hugging Face.
    loads (~2-3 min download on first run).
 
 **What the baseline measures:** pass/fail per bug and attempts used, over
-5 small real bugs (off-by-one, wrong comparison, mutable default arg,
-missing dict key, wrong sort). Each bug has tests that fail before the fix
+10 small real bugs (off-by-one, wrong comparison, mutable default arg,
+missing dict key, wrong sort, a str/int type error, a missing import, shared
+mutable state leaking between calls, a slicing off-by-one, and a function
+that mutates its input). Each bug has tests that fail before the fix
 and pass after. This is the starting point — later slices add more bugs,
 LoRA fine-tuning, and the paper-track write-up."""),
     code("""import torch
@@ -177,7 +179,7 @@ print("saved to /kaggle/working/baseline_results.md — copy it back to the repo
   competition allows LoRA; the small-model bonus still applies). Start from
   the fixes this agent produces, corrected by hand.
 - **Paper track:** the paper topics include new tasks and eval datasets —
-  this 5-bug set is the seed of one. Log every attempt, not just passes.
+  this 10-bug set is the seed of one. Log every attempt, not just passes.
 - **Submission:** the final Kaggle submission is the notebook itself plus a
   short write-up. Deadline Thu 3 Dec 2026, 05:29 IST."""),
 ]
