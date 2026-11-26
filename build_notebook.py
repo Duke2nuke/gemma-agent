@@ -31,7 +31,13 @@ from pathlib import Path
 
 # Files embedded by build_notebook.py from the repo (agent.py + bugs/).
 # Written to /kaggle/working so the notebook runs from a single upload.
-FILES = ''' + json.dumps(FILES, indent=1) + '''
+# ensure_ascii=False is REQUIRED here, not cosmetic: with the default
+# ensure_ascii=True, astral characters (e.g. the emoji in the real_02
+# super_len test) become \ud83d\ude00 surrogate-pair escapes in the
+# cell source, which Python parses as lone surrogates — and
+# Path.write_text then fails with UnicodeEncodeError on Kaggle.
+# With ensure_ascii=False the literal character is embedded instead.
+FILES = ''' + json.dumps(FILES, indent=1, ensure_ascii=False) + '''
 
 for rel, content in FILES.items():
     path = Path("/kaggle/working") / rel
