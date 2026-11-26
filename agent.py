@@ -1,16 +1,25 @@
 """Agent loop for the Gemma 4 Developer Agent entry.
 
 The loop is model-agnostic: the caller passes a ``generate`` callable that
-takes a prompt string and returns model text. The Kaggle notebook wires
-that callable up to a locally loaded Gemma 4 E4B model. Nothing here makes
-network calls.
+takes a prompt string and a ``greedy`` flag and returns model text. The
+Kaggle notebook wires that callable up to a locally loaded Gemma 4 E4B
+(QAT 4-bit) model. Nothing here makes network calls.
+
+Why greedy first, then sampled: run 1 (5 easy bugs) was 5/5, run 2 (same
+bugs + 5 harder) was 1/10 with identical prompt, loop and generation
+settings — pure sampling variance. So each round now tries up to 3
+candidate fixes: a greedy (deterministic) fix first, then up to 2 sampled
+fixes (temperature 0.7). Each candidate is tested against the bug's tests
+and the first one that passes is kept. A "round" is one attempt in the
+results table (max 3 rounds per bug, so up to 9 model calls per bug worst
+case).
 
 Flow per bug:
     1. copy the buggy file + its tests into a fresh working directory
     2. run the tests (they should fail at first)
-    3. ask the model for a fixed version of the file
-    4. write the fix, run the tests again
-    5. retry up to ``max_attempts`` times, then record pass/fail
+    3. per round: ask the model for a fix (greedy, then sampled), test
+       each candidate, keep the first that passes
+    4. retry up to ``max_attempts`` rounds, then record pass/fail
 """
 
 from __future__ import annotations
@@ -82,8 +91,15 @@ def run_agent(
     test_file: Path,
     work_root: Path,
     max_attempts: int = 3,
+    candidates_per_round: int = 3,
 ) -> BugResult:
-    """Run the fix loop for one bug. Edits only a copy, never the original."""
+    """Run the fix loop for one bug. Edits only a copy, never the original.
+
+    Each round tries up to ``candidates_per_round`` fixes: the first is
+    greedy (deterministic), the rest are sampled. Each candidate is tested
+    and the first one that passes wins the round. A round counts as one
+    attempt in the results table.
+    """
     name = bug_file.stem
     result = BugResult(name=name)
     workdir = work_root / name
@@ -111,23 +127,43 @@ def run_agent(
     for attempt in range(1, max_attempts + 1):
         result.attempts = attempt
         prompt = build_prompt(code, test_code, output)
-        try:
-            fixed = extract_code(generate(prompt))
-        except Exception as exc:  # model call failed, count as an attempt
-            result.log.append(f"attempt {attempt}: generate() raised {exc!r}")
-            continue
-        work_bug.write_text(fixed)
-        code = fixed
-        passed, output = run_tests(work_test, cwd=workdir)
-        result.log.append(f"attempt {attempt}: " + ("PASS" if passed else "FAIL"))
-        if passed:
-            result.passed = True
-            return result
+        last_fixed = None
+        for cand in range(candidates_per_round):
+            greedy = cand == 0
+            mode = "greedy" if greedy else "sampled"
+            try:
+                fixed = extract_code(generate(prompt, greedy=greedy))
+            except Exception as exc:  # model call failed, try next candidate
+                result.log.append(
+                    f"attempt {attempt} candidate {cand + 1} ({mode}): "
+                    f"generate() raised {exc!r}"
+                )
+                continue
+            last_fixed = fixed
+            work_bug.write_text(fixed)
+            passed, output = run_tests(work_test, cwd=workdir)
+            result.log.append(
+                f"attempt {attempt} candidate {cand + 1} ({mode}): "
+                + ("PASS" if passed else "FAIL")
+            )
+            if passed:
+                result.passed = True
+                return result
+        # Next round refines from the last candidate tried, as before.
+        if last_fixed is not None:
+            code = last_fixed
+        work_bug.write_text(code)
 
     return result
 
 
-def run_all(generate, bugs_dir: Path, work_root: Path, max_attempts: int = 3) -> list[BugResult]:
+def run_all(
+    generate,
+    bugs_dir: Path,
+    work_root: Path,
+    max_attempts: int = 3,
+    candidates_per_round: int = 3,
+) -> list[BugResult]:
     """Run the agent over every bug_*.py in bugs_dir (sorted by name)."""
     results = []
     for bug_file in sorted(bugs_dir.glob("bug_*.py")):
@@ -136,7 +172,9 @@ def run_all(generate, bugs_dir: Path, work_root: Path, max_attempts: int = 3) ->
             print(f"SKIP {bug_file.name}: no {test_file.name}")
             continue
         print(f"--- {bug_file.name} ---")
-        res = run_agent(generate, bug_file, test_file, work_root, max_attempts)
+        res = run_agent(
+            generate, bug_file, test_file, work_root, max_attempts, candidates_per_round
+        )
         print(f"    {'PASS' if res.passed else 'FAIL'} after {res.attempts} attempt(s)")
         results.append(res)
     return results

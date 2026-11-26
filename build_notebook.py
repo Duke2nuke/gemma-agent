@@ -65,14 +65,20 @@ cells = [
 
 Turn Gemma 4 E4B into an offline coding agent that fixes real Python bugs.
 The agent loop: read the buggy file, plan a fix, edit it, run the tests,
-retry up to 3 times, record pass/fail per bug. No API calls, the model runs
-locally on the Kaggle GPU.
+retry up to 3 rounds, record pass/fail per bug. Each round tries up to 3
+candidate fixes — a greedy (deterministic) one first, then up to 2 sampled
+ones — and keeps the first that passes. That kills the run-to-run sampling
+variance that flipped run 1 (5/5) to run 2 (1/10) with identical settings.
 
-**Model:** `google/gemma-4-e4b-it` — the small-model bonus lane ($10,000 for
-E2B/E4B; small-model entries stay eligible for the main leaderboard and the
-paper track). BF16 weights are ~17.9 GB, so it loads across Kaggle's 2x T4
-with `device_map="auto"`. If it OOMs, switch to the 4-bit QAT variant from
-the official `google/gemma-4-qat-q4-0` collection on Hugging Face.
+**Model:** `google/gemma-4-e4b-it-qat-w4a16-ct` — the QAT 4-bit E4B
+checkpoint. Only the QAT variants are permitted submission models, so the
+bf16 checkpoint is NOT used. The 4-bit weights (~4.5 GB) load easily on
+Kaggle's 2x T4 with `device_map="auto"`. This is the small-model bonus lane
+($10,000 for E2B/E4B; small-model entries stay eligible for the main
+leaderboard and the paper track). NOTE: the kagglehub handle below,
+`google/gemma-4/transformers/e4b-it-qat-w4a16-ct`, follows the pattern of
+the bf16 handle and is not yet confirmed on Kaggle — if kagglehub fails,
+the Hugging Face fallback loads the same checkpoint by its HF id.
 
 **Before running:**
 1. Notebook Settings → Accelerator → **GPU T4 x2**.
@@ -99,18 +105,24 @@ for i in range(torch.cuda.device_count()):
 assert torch.cuda.is_available(), "Enable GPU in Notebook Settings (T4 x2)"
 """),
     code("""# Kaggle images usually have these, but install to be safe.
-%pip install -q -U transformers accelerate kagglehub
+# compressed-tensors is needed to load the QAT w4a16 checkpoint.
+%pip install -q -U transformers accelerate kagglehub compressed-tensors
 """),
     code(SETUP_CELL),
     code("""import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-MODEL_ID = "google/gemma-4-e4b-it"  # instruction-tuned E4B
+# QAT 4-bit E4B — the only permitted submission model (bf16 is NOT allowed).
+MODEL_ID = "google/gemma-4-e4b-it-qat-w4a16-ct"
 
 model_path = None
 try:
     import kagglehub
-    model_path = kagglehub.model_download("google/gemma-4/transformers/e4b-it")
+    # Handle follows the bf16 pattern; unconfirmed on Kaggle — the HF
+    # fallback below loads the same checkpoint if this fails.
+    model_path = kagglehub.model_download(
+        "google/gemma-4/transformers/e4b-it-qat-w4a16-ct"
+    )
     print("downloaded via kagglehub:", model_path)
 except Exception as e:
     print("kagglehub failed, falling back to Hugging Face:", e)
@@ -125,22 +137,28 @@ model = AutoModelForCausalLM.from_pretrained(
 model.eval()
 print("model loaded:", load_from)
 """),
-    code("""def generate(prompt: str) -> str:
-    \"\"\"Gemma-backed generate() for agent.run_all. Low temperature: fixes
-    should be mostly deterministic.\"\"\"
+    code("""def generate(prompt: str, greedy: bool = False) -> str:
+    \"\"\"Gemma-backed generate() for agent.run_all.
+
+    greedy=True: deterministic decoding (do_sample=False) — the first
+    candidate of each round, which gives a stable baseline. greedy=False:
+    sampled (temperature 0.7, top_p 0.95) — the fallback candidates that
+    beat run-to-run sampling variance.
+    \"\"\"
     messages = [{"role": "user", "content": prompt}]
     text = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
     inputs = tokenizer(text, return_tensors="pt").to(model.device)
+    gen_kwargs = {"max_new_tokens": 512}
+    if greedy:
+        gen_kwargs["do_sample"] = False
+    else:
+        gen_kwargs["do_sample"] = True
+        gen_kwargs["temperature"] = 0.7
+        gen_kwargs["top_p"] = 0.95
     with torch.no_grad():
-        out = model.generate(
-            **inputs,
-            max_new_tokens=512,
-            temperature=0.2,
-            top_p=0.95,
-            do_sample=True,
-        )
+        out = model.generate(**inputs, **gen_kwargs)
     return tokenizer.decode(
         out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
     )
@@ -163,7 +181,7 @@ print(agent.results_table(results))
 
 md = (
     "# Baseline results\\n\\n"
-    "Model: google/gemma-4-e4b-it (bf16, Kaggle 2x T4)\\n"
+    "Model: google/gemma-4-e4b-it-qat-w4a16-ct (QAT 4-bit, Kaggle 2x T4)\\n"
     "Date: (fill in)\\n\\n"
     + agent.results_table(results)
 )
@@ -175,13 +193,14 @@ print("saved to /kaggle/working/baseline_results.md — copy it back to the repo
 
 - **More bugs:** add harder ones (wrong loop bounds in real code, type errors,
   broken imports) to `bugs/` and re-run. The loop needs no changes.
-- **LoRA fine-tuning:** fine-tune E4B on before/after fix pairs (the
-  competition allows LoRA; the small-model bonus still applies). Start from
-  the fixes this agent produces, corrected by hand.
+- **LoRA fine-tuning:** fine-tune the QAT E4B base on before/after fix
+  pairs (the competition allows LoRA; the small-model bonus still
+  applies). Start from the fixes this agent produces, corrected by hand.
 - **Paper track:** the paper topics include new tasks and eval datasets —
   this 10-bug set is the seed of one. Log every attempt, not just passes.
-- **Submission:** the final Kaggle submission is the notebook itself plus a
-  short write-up. Deadline Thu 3 Dec 2026, 05:29 IST."""),
+- **Submission:** the final competition submission is a submission.zip
+  with an ADK agent.yaml — this notebook is dev tooling for the loop, not
+  the submission. Deadline Thu 3 Dec 2026, 05:29 IST."""),
 ]
 
 for i, cell in enumerate(cells):

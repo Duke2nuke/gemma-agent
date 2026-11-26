@@ -10,10 +10,14 @@ Aarambh joined both the main track and the paper track.
 
 A baseline agent loop over 10 small, real bugs. The agent reads the buggy
 file, asks Gemma 4 E4B for a fix, edits the file, runs the tests, and retries
-up to 3 times. No API calls — the model runs locally on the Kaggle GPU.
+up to 3 rounds. Each round tries up to 3 candidate fixes — a greedy
+(deterministic) one first, then up to 2 sampled ones — and keeps the first
+that passes, which kills the run-to-run sampling variance that flipped run 1
+(5/5) to run 2 (1/10). No API calls — the model runs locally on the Kaggle GPU.
 
-**Model:** `google/gemma-4-e4b-it` (instruction-tuned E4B, 4.5B active
-params). This is the **small-model bonus lane** ($10,000 for E2B/E4B; LoRA
+**Model:** `google/gemma-4-e4b-it-qat-w4a16-ct` (QAT 4-bit E4B). Only the
+QAT variants are permitted submission models — the bf16 checkpoint is NOT
+used. This is the **small-model bonus lane** ($10,000 for E2B/E4B; LoRA
 fine-tuning allowed, and small-model entries stay eligible for the main
 leaderboard and the paper track).
 
@@ -46,16 +50,19 @@ changes the list it was given).
 3. Upload `gemma_agent.ipynb` (File → Import notebook, or copy-paste the
    cells). Run all cells top to bottom.
 4. The model download takes ~2–3 min on first run. The agent run itself
-   takes a few minutes (10 bugs × up to 3 attempts).
+   takes a few minutes (10 bugs × up to 3 rounds × up to 3 candidates).
 5. Copy the printed table and the generated `baseline_results.md` back into
    this repo.
 
 ## What the baseline measures
 
-Per bug: **pass/fail** and **attempts used** (max 3). Pass rate is
-`passed / 10`. The first 5 bugs have a real Kaggle baseline (5/5, 26 Nov
-2026, Gemma E4B on 2x T4); the 5 harder bugs have no baseline yet — run
-them on Kaggle and add a second table to `baseline_results.md`.
+Per bug: **pass/fail** and **attempts used** (max 3 rounds, up to 3
+candidate fixes per round). Pass rate is `passed / 10`. The first 5 bugs
+have a real Kaggle baseline (5/5, 26 Nov 2026, bf16 Gemma E4B on 2x T4 —
+note: that run used the bf16 checkpoint, which is NOT a permitted
+submission model; the next run uses the QAT checkpoint); the 5 harder bugs
+have no baseline yet — run them on Kaggle and add a second table to
+`baseline_results.md`.
 
 ## Verified locally (no GPU, no model)
 
@@ -63,8 +70,12 @@ them on Kaggle and add a second table to `baseline_results.md`.
 - Every buggy test file fails before the fix (24 of 30 tests fail; the 6
   that pass on buggy code are ones that do not touch the bug); all 30 tests
   pass after the reference fixes.
-- The agent loop goes 10/10 with a fake model that returns the reference fix
-  (validates the loop logic, not the model).
+- The agent loop goes 10/10 with a fake model that returns the reference
+  fix on the greedy call (validates the loop logic, not the model). It also
+  goes 10/10 with a fake that fails the greedy call and returns the fix on
+  the sampled call, and 0/10 with a fake that always fails (3 attempts, 9
+  model calls per bug worst case) — so the greedy-then-sampled fallthrough
+  is verified.
 - The notebook passes `nbformat.validate` with no warnings.
 
 Run the checks yourself: `/tmp/verify_gemma.py` is not in this repo (it was
@@ -75,10 +86,12 @@ a one-off local script); the checks are `py_compile` + `pytest` on
 
 - **More bugs:** add harder ones (real-world loop errors, type errors,
   broken imports) to `bugs/` and re-run. The loop needs no changes.
-- **LoRA fine-tuning:** fine-tune E4B on before/after fix pairs. The
-  competition allows LoRA and the small-model bonus still applies.
+- **LoRA fine-tuning:** fine-tune the QAT E4B base on before/after fix
+  pairs. The competition allows LoRA and the small-model bonus still
+  applies.
 - **Paper track:** paper topics include new tasks and eval datasets — this
   5-bug set is the seed of one. Log every attempt, not just passes.
-- **Submission:** the final Kaggle submission is the notebook plus a short
-  write-up, by 3 Dec 2026, 05:29 IST. Aarambh submits; nothing here logs
-  into Kaggle or submits anything.
+- **Submission:** the final competition submission is a submission.zip
+  with an ADK agent.yaml — this repo/notebook is dev tooling, not the
+  submission. Deadline 3 Dec 2026, 05:29 IST. Aarambh submits; nothing
+  here logs into Kaggle or submits anything.
