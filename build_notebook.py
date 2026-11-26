@@ -168,13 +168,12 @@ model = AutoModelForCausalLM.from_pretrained(
     # Do NOT force bf16 here: it dequantizes the QAT 4-bit weights to
     # ~18 GB and the generate call OOMs on a T4. Let compressed-tensors
     # load the checkpoint in native 4-bit.
-    device_map="auto",
-    # Force the split with a per-GPU cap: device_map="balanced" did NOT
-    # split it on T4x2 — GPU 0 still held all 13.85 GB (23:37 run), so
-    # generate died on a 50 MiB alloc. Capping GPU 0 at 8 GiB makes
-    # accelerate put the rest on GPU 1 (~8 GB / ~6 GB), leaving both
-    # GPUs room for the dequantization + activations generate needs.
-    max_memory={0: "8GiB", 1: "14GiB"},
+    # Load on CPU first: the compressed-tensors quantization/compression
+    # step temporarily needs ~2x the model size, and doing it on GPU
+    # OOMs (the 00:18 run died trying to allocate 6.2 GiB on GPU 1
+    # during load, with 9.27 GiB already there). CPU RAM handles the
+    # spike; the weights are dispatched to the GPUs already quantized.
+    device_map="cpu",
     # MUST stay eager: Gemma4AudioModel (part of the full multimodal
     # Gemma4ForConditionalGeneration checkpoint) does not support SDPA —
     # transformers raises ValueError and tells you to use eager instead
@@ -183,23 +182,15 @@ model = AutoModelForCausalLM.from_pretrained(
     low_cpu_mem_usage=True,
 )
 model.eval()
-# Fix for generate() crashing on module._hf_hook.no_grad (23:52 run).
-# from_pretrained with max_memory split the weights but did not attach
-# the accelerate hook to the top-level Gemma4ForConditionalGeneration,
-# and generate() reads module._hf_hook.no_grad directly (so the earlier
-# model._hf_hook = None idea would fail too — None has no .no_grad).
-# Re-dispatch attaches real hooks; if that fails, a dummy hook with
-# no_grad=True lets generate() past the check (the per-layer hooks
-# still move tensors across the GPU split).
+# Dispatch the already-quantized weights to the GPUs. This both splits
+# the model (~8 GiB on GPU 0, the rest on GPU 1) and attaches the
+# _hf_hook generate() needs (it reads module._hf_hook.no_grad — the
+# 23:52 crash was the hook missing on the top-level model).
 from accelerate import dispatch_model
 from types import SimpleNamespace
+model = dispatch_model(model, max_memory={0: "8GiB", 1: "14GiB"})
 if not hasattr(model, "_hf_hook"):
-    try:
-        model = dispatch_model(model, device_map=model.hf_device_map)
-    except Exception as e:
-        print("re-dispatch failed, using dummy hook:", e)
-    if not hasattr(model, "_hf_hook"):
-        model._hf_hook = SimpleNamespace(no_grad=True)
+    model._hf_hook = SimpleNamespace(no_grad=True)
 # OOM diagnosis (26 Nov): if the first param is bf16/fp32 instead of
 # a 4-bit quantized weight, the checkpoint was dequantized on load and
 # will OOM on a single T4. Print it so the run log shows it.
