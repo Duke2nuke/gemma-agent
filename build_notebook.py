@@ -21,6 +21,10 @@ for bug in sorted((ROOT / "bugs").glob("bug_*.py")):
     FILES[f"bugs/{bug.name}"] = bug.read_text()
 for test in sorted((ROOT / "bugs" / "tests").glob("*.py")):
     FILES[f"bugs/tests/{test.name}"] = test.read_text()
+for bug in sorted((ROOT / "real_bugs").glob("real_*.py")):
+    FILES[f"real_bugs/{bug.name}"] = bug.read_text()
+for test in sorted((ROOT / "real_bugs" / "tests").glob("*.py")):
+    FILES[f"real_bugs/tests/{test.name}"] = test.read_text()
 
 SETUP_CELL = '''import sys
 from pathlib import Path
@@ -75,12 +79,16 @@ checkpoint. Only the QAT variants are permitted submission models, so the
 bf16 checkpoint is NOT used. The 4-bit weights (~4.5 GB) load easily on
 Kaggle's 2x T4 with `device_map="auto"`. This is the small-model bonus lane
 ($10,000 for E2B/E4B; small-model entries stay eligible for the main
-leaderboard and the paper track). NOTE: the kagglehub handle below,
+leaderboard). NOTE: the kagglehub handle below,
 `google/gemma-4/transformers/e4b-it-qat-w4a16-ct`, follows the pattern of
 the bf16 handle and is not yet confirmed on Kaggle — if kagglehub fails,
 the Hugging Face fallback loads the same checkpoint by its HF id.
 
 **Before running:**
+0. If you already ran an earlier version of this notebook in this
+   session, **restart the kernel first** (Session → Restart, or Runtime →
+   Restart) — the old model otherwise stays in GPU memory and the new
+   load runs out of memory.
 1. Notebook Settings → Accelerator → **GPU T4 x2**.
 2. Accept the Gemma license: on Kaggle go to the `google/gemma-4` model page
    and accept, or add your Hugging Face token as a Kaggle secret named
@@ -93,8 +101,10 @@ the Hugging Face fallback loads the same checkpoint by its HF id.
 missing dict key, wrong sort, a str/int type error, a missing import, shared
 mutable state leaking between calls, a slicing off-by-one, and a function
 that mutates its input). Each bug has tests that fail before the fix
-and pass after. This is the starting point — later slices add more bugs,
-LoRA fine-tuning, and the paper-track write-up."""),
+and pass after. A second section runs the same loop over 11 real bugs
+extracted from requests, httpx and rich — the competition's own repos —
+which is the harder, more representative test. This is the starting
+point — later slices add more bugs and LoRA fine-tuning."""),
     code("""import torch
 
 print("torch", torch.__version__)
@@ -131,7 +141,9 @@ load_from = model_path or MODEL_ID
 tokenizer = AutoTokenizer.from_pretrained(load_from)
 model = AutoModelForCausalLM.from_pretrained(
     load_from,
-    torch_dtype=torch.bfloat16,
+    # Do NOT force bf16 here: it dequantizes the QAT 4-bit weights to
+    # ~18 GB and the generate call OOMs on a T4. Let compressed-tensors
+    # load the checkpoint in native 4-bit.
     device_map="auto",
 )
 model.eval()
@@ -179,11 +191,27 @@ print(agent.results_table(results))
 """),
     code("""from pathlib import Path
 
+print("## Real bugs")
+real_results = agent.run_all(
+    generate,
+    Path("/kaggle/working/real_bugs"),
+    Path("/kaggle/working/runs_real"),
+    max_attempts=3,
+    pattern="real_*.py",
+)
+print()
+print(agent.results_table(real_results))
+"""),
+    code("""from pathlib import Path
+
 md = (
     "# Baseline results\\n\\n"
     "Model: google/gemma-4-e4b-it-qat-w4a16-ct (QAT 4-bit, Kaggle 2x T4)\\n"
     "Date: (fill in)\\n\\n"
+    "## Dev bugs (10 synthetic)\\n\\n"
     + agent.results_table(results)
+    + "\\n## Real bugs (11 from requests/httpx/rich)\\n\\n"
+    + agent.results_table(real_results)
 )
 Path("/kaggle/working/baseline_results.md").write_text(md)
 print(md)
@@ -196,8 +224,6 @@ print("saved to /kaggle/working/baseline_results.md — copy it back to the repo
 - **LoRA fine-tuning:** fine-tune the QAT E4B base on before/after fix
   pairs (the competition allows LoRA; the small-model bonus still
   applies). Start from the fixes this agent produces, corrected by hand.
-- **Paper track:** the paper topics include new tasks and eval datasets —
-  this 10-bug set is the seed of one. Log every attempt, not just passes.
 - **Submission:** the final competition submission is a submission.zip
   with an ADK agent.yaml — this notebook is dev tooling for the loop, not
   the submission. Deadline Thu 3 Dec 2026, 05:29 IST."""),

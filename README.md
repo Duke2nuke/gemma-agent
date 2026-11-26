@@ -3,7 +3,9 @@
 Kaggle + Google DeepMind competition ($110,000). Task: turn a small open
 Gemma 4 model into an **offline coding agent that fixes real Python bugs**.
 
-Aarambh joined both the main track and the paper track.
+Aarambh joined the main track. The paper track closed 12 Nov 2026,
+before he joined, so it is out of reach — all effort is on the main
+track and the small-model bonus.
 **Final submission: Thu 3 Dec 2026, 05:29 IST.**
 
 ## What this is
@@ -19,7 +21,7 @@ that passes, which kills the run-to-run sampling variance that flipped run 1
 QAT variants are permitted submission models — the bf16 checkpoint is NOT
 used. This is the **small-model bonus lane** ($10,000 for E2B/E4B; LoRA
 fine-tuning allowed, and small-model entries stay eligible for the main
-leaderboard and the paper track).
+leaderboard).
 
 ## Files
 
@@ -28,7 +30,8 @@ leaderboard and the paper track).
 | `gemma_agent.ipynb` | The Kaggle notebook. Self-contained: its setup cell writes `agent.py` + `bugs/` into `/kaggle/working` and imports `agent`. |
 | `agent.py` | The agent loop as a plain module (model-agnostic: takes a `generate` callable). Same code the notebook uses. |
 | `bugs/` | 10 buggy files + `tests/` with one test file per bug. Each test file fails before the fix and passes after. |
-| `build_notebook.py` | Regenerates `gemma_agent.ipynb` from `agent.py` + `bugs/` (single source of truth). Run it after editing either. |
+| `real_bugs/` | 11 real bugs extracted from requests, httpx and rich (the competition's repos) + `tests/`. The notebook runs these as a second section. |
+| `build_notebook.py` | Regenerates `gemma_agent.ipynb` from `agent.py` + `bugs/` + `real_bugs/` (single source of truth). Run it after editing any of them. |
 | `baseline_results.md` | Empty results table. Fill it in from a real Kaggle run. |
 
 The 10 bugs: off-by-one (`total` misses the last number), wrong comparison
@@ -62,7 +65,9 @@ have a real Kaggle baseline (5/5, 26 Nov 2026, bf16 Gemma E4B on 2x T4 —
 note: that run used the bf16 checkpoint, which is NOT a permitted
 submission model; the next run uses the QAT checkpoint); the 5 harder bugs
 have no baseline yet — run them on Kaggle and add a second table to
-`baseline_results.md`.
+`baseline_results.md`. A second section in the notebook runs the same
+loop over the 11 real bugs in `real_bugs/` and prints a second table;
+that is the harder, more representative number.
 
 ## Verified locally (no GPU, no model)
 
@@ -89,8 +94,6 @@ a one-off local script); the checks are `py_compile` + `pytest` on
 - **LoRA fine-tuning:** fine-tune the QAT E4B base on before/after fix
   pairs. The competition allows LoRA and the small-model bonus still
   applies.
-- **Paper track:** paper topics include new tasks and eval datasets — this
-  5-bug set is the seed of one. Log every attempt, not just passes.
 - **Submission:** the final competition submission is a submission.zip
   with an ADK agent.yaml — this repo/notebook is dev tooling, not the
   submission. Deadline 3 Dec 2026, 05:29 IST. Aarambh submits; nothing

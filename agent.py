@@ -163,10 +163,15 @@ def run_all(
     work_root: Path,
     max_attempts: int = 3,
     candidates_per_round: int = 3,
+    pattern: str = "bug_*.py",
 ) -> list[BugResult]:
-    """Run the agent over every bug_*.py in bugs_dir (sorted by name)."""
+    """Run the agent over every file matching ``pattern`` in bugs_dir (sorted by name).
+
+    Default pattern is the synthetic dev set (``bug_*.py``); pass
+    ``pattern="real_*.py"`` for the real-bug set in ``real_bugs/``.
+    """
     results = []
-    for bug_file in sorted(bugs_dir.glob("bug_*.py")):
+    for bug_file in sorted(bugs_dir.glob(pattern)):
         test_file = bugs_dir / "tests" / f"test_{bug_file.stem}.py"
         if not test_file.exists():
             print(f"SKIP {bug_file.name}: no {test_file.name}")
