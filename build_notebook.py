@@ -95,7 +95,14 @@ the Hugging Face fallback loads the same checkpoint by its HF id.
    session, **restart the kernel first** (Session → Restart, or Runtime →
    Restart) — the old model otherwise stays in GPU memory and the new
    load runs out of memory.
-1. Notebook Settings → Accelerator → **GPU T4 x2**.
+1. Notebook Settings → Accelerator → **GPU L4 x4** (recommended — the
+   competition's own hardware, 96 GB, and the QAT load spikes past what
+   2x T4 can hold). Attach the model as an input first: right panel →
+   Input → Add input → Models → search "gemma-4" → pick the
+   `e4b-it-qat-w4a16-ct` variant. The notebook loads the attached model
+   first; without it, L4 has no internet so the kagglehub/HF download
+   cannot work. (T4 x2 still works as a fallback: there the notebook
+   downloads the model itself.)
 2. Accept the Gemma license: on Kaggle go to the `google/gemma-4` model page
    and accept, or add your Hugging Face token as a Kaggle secret named
    `HF_TOKEN` (the notebook falls back to it if kagglehub fails).
@@ -118,7 +125,7 @@ print("cuda available:", torch.cuda.is_available())
 for i in range(torch.cuda.device_count()):
     p = torch.cuda.get_device_properties(i)
     print(f"GPU {i}: {p.name}, {p.total_memory / 1e9:.1f} GB")
-assert torch.cuda.is_available(), "Enable GPU in Notebook Settings (T4 x2)"
+assert torch.cuda.is_available(), "Enable GPU in Notebook Settings (L4 x4)"
 """),
     code("""# Kaggle images usually have these, but install to be safe.
 # compressed-tensors is needed to load the QAT w4a16 checkpoint.
@@ -132,16 +139,27 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 MODEL_ID = "google/gemma-4-e4b-it-qat-w4a16-ct"
 
 model_path = None
-try:
-    import kagglehub
-    # Handle follows the bf16 pattern; unconfirmed on Kaggle — the HF
-    # fallback below loads the same checkpoint if this fails.
-    model_path = kagglehub.model_download(
-        "google/gemma-4/transformers/e4b-it-qat-w4a16-ct"
-    )
-    print("downloaded via kagglehub:", model_path)
-except Exception as e:
-    print("kagglehub failed, falling back to Hugging Face:", e)
+# 1. Attached model input (the L4x4 path — L4 has no internet, so the
+# model must be attached: right panel → Input → Add input → Models).
+from pathlib import Path as _P
+if _P("/kaggle/input").exists():
+    for _d in sorted(_P("/kaggle/input").glob("**/config.json")):
+        if "gemma" in str(_d).lower():
+            model_path = str(_d.parent)
+            print("using attached model input:", model_path)
+            break
+# 2. Kaggle download (works on T4x2, which has internet).
+if model_path is None:
+    try:
+        import kagglehub
+        # Handle follows the bf16 pattern; unconfirmed on Kaggle — the HF
+        # fallback below loads the same checkpoint if this fails.
+        model_path = kagglehub.model_download(
+            "google/gemma-4/transformers/e4b-it-qat-w4a16-ct"
+        )
+        print("downloaded via kagglehub:", model_path)
+    except Exception as e:
+        print("kagglehub failed, falling back to Hugging Face:", e)
 
 load_from = model_path or MODEL_ID
 tokenizer = AutoTokenizer.from_pretrained(load_from)
@@ -151,11 +169,26 @@ model = AutoModelForCausalLM.from_pretrained(
     # ~18 GB and the generate call OOMs on a T4. Let compressed-tensors
     # load the checkpoint in native 4-bit.
     device_map="auto",
+    attn_implementation="sdpa",  # eager attention uses far more memory
+    low_cpu_mem_usage=True,
 )
 model.eval()
+# OOM diagnosis (26 Nov): if the first param is bf16/fp32 instead of
+# a 4-bit quantized weight, the checkpoint was dequantized on load and
+# will OOM on a single T4. Print it so the run log shows it.
+first = next(model.parameters())
+total = sum(p.numel() for p in model.parameters())
 print("model loaded:", load_from)
+print(f"first param dtype: {first.dtype}, total params: {total / 1e9:.2f}B")
+print("quantization_config:", getattr(model.config, "quantization_config", None))
+for i in range(torch.cuda.device_count()):
+    print(
+        f"GPU {i} after load: "
+        f"allocated {torch.cuda.memory_allocated(i) / 1e9:.1f} GB, "
+        f"reserved {torch.cuda.memory_reserved(i) / 1e9:.1f} GB"
+    )
 """),
-    code("""def generate(prompt: str, greedy: bool = False) -> str:
+    code("""def generate(prompt: str, greedy: bool = False, max_new_tokens: int = 512) -> str:
     \"\"\"Gemma-backed generate() for agent.run_all.
 
     greedy=True: deterministic decoding (do_sample=False) — the first
@@ -168,7 +201,8 @@ print("model loaded:", load_from)
         messages, tokenize=False, add_generation_prompt=True
     )
     inputs = tokenizer(text, return_tensors="pt").to(model.device)
-    gen_kwargs = {"max_new_tokens": 512}
+    torch.cuda.empty_cache()  # free fragmented memory before generate
+    gen_kwargs = {"max_new_tokens": max_new_tokens}
     if greedy:
         gen_kwargs["do_sample"] = False
     else:
@@ -182,7 +216,7 @@ print("model loaded:", load_from)
     )
 
 
-print(generate("Write one line of Python that adds 1 and 2. Reply with code only."))
+print(generate("Write one line of Python that adds 1 and 2. Reply with code only.", max_new_tokens=64))
 """),
     code("""from pathlib import Path
 
