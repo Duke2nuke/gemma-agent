@@ -183,13 +183,23 @@ model = AutoModelForCausalLM.from_pretrained(
     low_cpu_mem_usage=True,
 )
 model.eval()
-# Workaround for AttributeError: 'Gemma4ForConditionalGeneration' object
-# has no attribute '_hf_hook' (the 23:52 crash). accelerate did not attach
-# the hook to this multimodal model, and generate() reads it directly.
-# Setting it to None makes generate() skip the device-map handling; the
-# per-layer hooks still move tensors across the GPU split.
+# Fix for generate() crashing on module._hf_hook.no_grad (23:52 run).
+# from_pretrained with max_memory split the weights but did not attach
+# the accelerate hook to the top-level Gemma4ForConditionalGeneration,
+# and generate() reads module._hf_hook.no_grad directly (so the earlier
+# model._hf_hook = None idea would fail too — None has no .no_grad).
+# Re-dispatch attaches real hooks; if that fails, a dummy hook with
+# no_grad=True lets generate() past the check (the per-layer hooks
+# still move tensors across the GPU split).
+from accelerate import dispatch_model
+from types import SimpleNamespace
 if not hasattr(model, "_hf_hook"):
-    model._hf_hook = None
+    try:
+        model = dispatch_model(model, device_map=model.hf_device_map)
+    except Exception as e:
+        print("re-dispatch failed, using dummy hook:", e)
+    if not hasattr(model, "_hf_hook"):
+        model._hf_hook = SimpleNamespace(no_grad=True)
 # OOM diagnosis (26 Nov): if the first param is bf16/fp32 instead of
 # a 4-bit quantized weight, the checkpoint was dequantized on load and
 # will OOM on a single T4. Print it so the run log shows it.
