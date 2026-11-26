@@ -186,9 +186,12 @@ model.eval()
 # the model (~8 GiB on GPU 0, the rest on GPU 1) and attaches the
 # _hf_hook generate() needs (it reads module._hf_hook.no_grad — the
 # 23:52 crash was the hook missing on the top-level model).
-from accelerate import dispatch_model
+from accelerate import dispatch_model, infer_auto_device_map
 from types import SimpleNamespace
-model = dispatch_model(model, max_memory={0: "8GiB", 1: "14GiB"})
+# dispatch_model() does not take max_memory (TypeError on the 00:26 run),
+# so infer the map first, then dispatch with it.
+device_map = infer_auto_device_map(model, max_memory={0: "8GiB", 1: "14GiB"})
+model = dispatch_model(model, device_map=device_map)
 if not hasattr(model, "_hf_hook"):
     model._hf_hook = SimpleNamespace(no_grad=True)
 # OOM diagnosis (26 Nov): if the first param is bf16/fp32 instead of
