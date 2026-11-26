@@ -168,12 +168,13 @@ model = AutoModelForCausalLM.from_pretrained(
     # Do NOT force bf16 here: it dequantizes the QAT 4-bit weights to
     # ~18 GB and the generate call OOMs on a T4. Let compressed-tensors
     # load the checkpoint in native 4-bit.
-    device_map="balanced",
-    # BALANCED, not auto: auto puts the whole ~14 GB model on GPU 0
-    # (13.89 GB allocated, 14.81 MiB free — the 23:31 OOM died on a
-    # 50 MiB allocation during generate). Balanced splits it across
-    # both T4s (~7 GB each), leaving room for the per-layer
-    # dequantization + activations that generate needs.
+    device_map="auto",
+    # Force the split with a per-GPU cap: device_map="balanced" did NOT
+    # split it on T4x2 — GPU 0 still held all 13.85 GB (23:37 run), so
+    # generate died on a 50 MiB alloc. Capping GPU 0 at 8 GiB makes
+    # accelerate put the rest on GPU 1 (~8 GB / ~6 GB), leaving both
+    # GPUs room for the dequantization + activations generate needs.
+    max_memory={0: "8GiB", 1: "14GiB"},
     # MUST stay eager: Gemma4AudioModel (part of the full multimodal
     # Gemma4ForConditionalGeneration checkpoint) does not support SDPA —
     # transformers raises ValueError and tells you to use eager instead
