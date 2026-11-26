@@ -95,14 +95,15 @@ SDPA (that was the 23:21 ValueError).
    session, **restart the kernel first** (Session → Restart, or Runtime →
    Restart) — the old model otherwise stays in GPU memory and the new
    load runs out of memory.
-1. Notebook Settings → Accelerator → **GPU L4 x4** (recommended — the
-   competition's own hardware, 96 GB, and the QAT load spikes past what
-   2x T4 can hold). Attach the model as an input first: right panel →
+1. Notebook Settings → Accelerator → **GPU L4 x4 (required)** — the
+   competition's own hardware, 96 GB. The whole model fits on ONE 24 GB
+   L4, so no GPU split is needed. (T4 x2 no longer works: the split
+   kept hitting accelerate edge cases and the model cannot run split.)
+   Attach the model as an input first: right panel →
    Input → Add input → Models → search "gemma-4" → pick the
    `e4b-it-qat-w4a16-ct` variant. The notebook loads the attached model
    first; without it, L4 has no internet so the kagglehub/HF download
-   cannot work. (T4 x2 still works as a fallback: there the notebook
-   downloads the model itself.)
+   cannot work.
 2. Accept the Gemma license: on Kaggle go to the `google/gemma-4` model page
    and accept, or add your Hugging Face token as a Kaggle secret named
    `HF_TOKEN` (the notebook falls back to it if kagglehub fails).
@@ -148,7 +149,7 @@ if _P("/kaggle/input").exists():
             model_path = str(_d.parent)
             print("using attached model input:", model_path)
             break
-# 2. Kaggle download (works on T4x2, which has internet).
+# 2. Kaggle download (only if the session has internet; L4 does not).
 if model_path is None:
     try:
         import kagglehub
@@ -168,12 +169,15 @@ model = AutoModelForCausalLM.from_pretrained(
     # Do NOT force bf16 here: it dequantizes the QAT 4-bit weights to
     # ~18 GB and the generate call OOMs on a T4. Let compressed-tensors
     # load the checkpoint in native 4-bit.
-    # Load on CPU first: the compressed-tensors quantization/compression
-    # step temporarily needs ~2x the model size, and doing it on GPU
-    # OOMs (the 00:18 run died trying to allocate 6.2 GiB on GPU 1
-    # during load, with 9.27 GiB already there). CPU RAM handles the
-    # spike; the weights are dispatched to the GPUs already quantized.
-    device_map="cpu",
+    # L4x4 only: the whole 13.85 GB model fits on ONE 24 GB L4, so
+    # device_map="auto" keeps it on GPU 0 with ~10 GB free for
+    # generate. Run this notebook on GPU L4 x4 with the model attached
+    # (L4 has no internet, so the attached input is required).
+    # On T4x2 this OOMs — the split path kept hitting accelerate edge
+    # cases (balanced not splitting, load OOM during quantization,
+    # dispatch not attaching the top-level _hf_hook, layer_scalar
+    # dropped from the map), so the split is abandoned.
+    device_map="auto",
     # MUST stay eager: Gemma4AudioModel (part of the full multimodal
     # Gemma4ForConditionalGeneration checkpoint) does not support SDPA —
     # transformers raises ValueError and tells you to use eager instead
@@ -182,36 +186,6 @@ model = AutoModelForCausalLM.from_pretrained(
     low_cpu_mem_usage=True,
 )
 model.eval()
-# Dispatch the already-quantized weights to the GPUs. This both splits
-# the model (~8 GiB on GPU 0, the rest on GPU 1) and attaches the
-# _hf_hook generate() needs (it reads module._hf_hook.no_grad — the
-# 23:52 crash was the hook missing on the top-level model).
-from accelerate import dispatch_model, infer_auto_device_map
-from types import SimpleNamespace
-# dispatch_model() does not take max_memory (TypeError on the 00:26 run),
-# so infer the map first, then dispatch with it.
-# clean_result=False keeps more entries, but infer_auto_device_map still
-# drops parameters that sit directly on a layer it splits across
-# devices (the per-layer scalar). Assign any uncovered tensor to its
-# parent module's device so dispatch accepts the map (00:30 run).
-# NOTE: check BOTH parameters and buffers — layer_scalar is a buffer,
-# not a parameter, so named_parameters() alone never sees it and the
-# patch silently did nothing (00:34 run).
-device_map = infer_auto_device_map(
-    model, max_memory={0: "8GiB", 1: "14GiB"}, clean_result=False
-)
-for name, _ in list(model.named_parameters()) + list(model.named_buffers()):
-    if not any(name == k or name.startswith(k + ".") for k in device_map):
-        parent = name.rsplit(".", 1)[0]
-        dev = next(
-            (d for k, d in device_map.items() if k.startswith(parent + ".")),
-            0,
-        )
-        device_map[name] = dev
-        print("device_map: assigned uncovered param", name, "->", dev)
-model = dispatch_model(model, device_map=device_map)
-if not hasattr(model, "_hf_hook"):
-    model._hf_hook = SimpleNamespace(no_grad=True)
 # OOM diagnosis (26 Nov): if the first param is bf16/fp32 instead of
 # a 4-bit quantized weight, the checkpoint was dequantized on load and
 # will OOM on a single T4. Print it so the run log shows it.
@@ -285,7 +259,7 @@ print(agent.results_table(real_results))
 
 md = (
     "# Baseline results\\n\\n"
-    "Model: google/gemma-4-e4b-it-qat-w4a16-ct (QAT 4-bit, Kaggle 2x T4)\\n"
+    "Model: google/gemma-4-e4b-it-qat-w4a16-ct (QAT 4-bit, Kaggle L4x4)\\n"
     "Date: (fill in)\\n\\n"
     "## Dev bugs (10 synthetic)\\n\\n"
     + agent.results_table(results)
