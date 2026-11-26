@@ -183,6 +183,13 @@ model = AutoModelForCausalLM.from_pretrained(
     low_cpu_mem_usage=True,
 )
 model.eval()
+# Workaround for AttributeError: 'Gemma4ForConditionalGeneration' object
+# has no attribute '_hf_hook' (the 23:52 crash). accelerate did not attach
+# the hook to this multimodal model, and generate() reads it directly.
+# Setting it to None makes generate() skip the device-map handling; the
+# per-layer hooks still move tensors across the GPU split.
+if not hasattr(model, "_hf_hook"):
+    model._hf_hook = None
 # OOM diagnosis (26 Nov): if the first param is bf16/fp32 instead of
 # a 4-bit quantized weight, the checkpoint was dequantized on load and
 # will OOM on a single T4. Print it so the run log shows it.
