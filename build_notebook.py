@@ -190,7 +190,12 @@ from accelerate import dispatch_model, infer_auto_device_map
 from types import SimpleNamespace
 # dispatch_model() does not take max_memory (TypeError on the 00:26 run),
 # so infer the map first, then dispatch with it.
-device_map = infer_auto_device_map(model, max_memory={0: "8GiB", 1: "14GiB"})
+# clean_result=False: the default cleaning drops the per-layer scalar
+# (model.language_model.layers.23.layer_scalar) from the map, and
+# dispatch_model then rejects the map as incomplete (00:28 run).
+device_map = infer_auto_device_map(
+    model, max_memory={0: "8GiB", 1: "14GiB"}, clean_result=False
+)
 model = dispatch_model(model, device_map=device_map)
 if not hasattr(model, "_hf_hook"):
     model._hf_hook = SimpleNamespace(no_grad=True)
