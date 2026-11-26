@@ -192,12 +192,15 @@ from types import SimpleNamespace
 # so infer the map first, then dispatch with it.
 # clean_result=False keeps more entries, but infer_auto_device_map still
 # drops parameters that sit directly on a layer it splits across
-# devices (the per-layer scalar). Assign any uncovered parameter to
-# its parent module's device so dispatch accepts the map (00:30 run).
+# devices (the per-layer scalar). Assign any uncovered tensor to its
+# parent module's device so dispatch accepts the map (00:30 run).
+# NOTE: check BOTH parameters and buffers — layer_scalar is a buffer,
+# not a parameter, so named_parameters() alone never sees it and the
+# patch silently did nothing (00:34 run).
 device_map = infer_auto_device_map(
     model, max_memory={0: "8GiB", 1: "14GiB"}, clean_result=False
 )
-for name, _ in model.named_parameters():
+for name, _ in list(model.named_parameters()) + list(model.named_buffers()):
     if not any(name == k or name.startswith(k + ".") for k in device_map):
         parent = name.rsplit(".", 1)[0]
         dev = next(
