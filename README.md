@@ -46,7 +46,7 @@ changes the list it was given).
 
 ## How to run it on Kaggle
 
-1. Create a new Kaggle notebook. Notebook Settings → Accelerator → **GPU T4 x2**.
+1. Create a new Kaggle notebook. Notebook Settings → Accelerator → **GPU L4 x4** (required: the QAT model needs the attached model input, and `device_map={"": 0}` loads it whole on one 24 GB L4; T4 x2 is abandoned).
 2. Accept the Gemma license on the `google/gemma-4` model page (or add your
    Hugging Face token as a Kaggle secret named `HF_TOKEN` — the notebook
    falls back to it if kagglehub fails).
@@ -93,8 +93,13 @@ a one-off local script); the checks are `py_compile` + `pytest` on
   broken imports) to `bugs/` and re-run. The loop needs no changes.
 - **LoRA fine-tuning:** fine-tune the QAT E4B base on before/after fix
   pairs. The competition allows LoRA and the small-model bonus still
-  applies.
-- **Submission:** the final competition submission is a submission.zip
-  with an ADK agent.yaml — this repo/notebook is dev tooling, not the
-  submission. Deadline 3 Dec 2026, 05:29 IST. Aarambh submits; nothing
-  here logs into Kaggle or submits anything.
+  applies. The training data is ready: `build_lora_dataset.py` rebuilds
+  `lora_dataset.jsonl` (21 examples, 10 synthetic + 11 real) in the
+  agent's exact inference format, and every pair is verified — the buggy
+  file FAILs its tests and the fixed file PASSes them — before it is
+  written. Training itself still needs a Kaggle GPU run.
+- **Submission:** `submission/` holds the ADK agent (`agent.yaml` at the
+  root, E4B QAT model, explorer sub-agent, greedy-first system prompt)
+  and `submission.zip` is the built, validated archive (8 files, no
+  Python, all `!include`s resolve). Deadline 3 Dec 2026, 05:29 IST.
+  Aarambh submits; nothing here logs into Kaggle or submits anything.
