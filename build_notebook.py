@@ -169,15 +169,20 @@ model = AutoModelForCausalLM.from_pretrained(
     # Do NOT force bf16 here: it dequantizes the QAT 4-bit weights to
     # ~18 GB and the generate call OOMs on a T4. Let compressed-tensors
     # load the checkpoint in native 4-bit.
-    # L4x4 only: the whole 13.85 GB model fits on ONE 24 GB L4, so
-    # device_map="auto" keeps it on GPU 0 with ~10 GB free for
-    # generate. Run this notebook on GPU L4 x4 with the model attached
-    # (L4 has no internet, so the attached input is required).
+    # L4x4 only: the whole 13.85 GB model fits on ONE 24 GB L4, so load
+    # it whole on GPU 0 with a single-device map. device_map="auto" is
+    # NOT used: on a 4-GPU node auto still runs accelerate dispatch and
+    # the top-level Gemma4ForConditionalGeneration ends up with a
+    # wrapped forward but no _hf_hook, so generate() raises
+    # AttributeError (28 Nov 01:38 IST run). A single-device map
+    # attaches no hooks at all, which is what fixes it. Run this
+    # notebook on GPU L4 x4 with the model attached (L4 has no
+    # internet, so the attached input is required).
     # On T4x2 this OOMs — the split path kept hitting accelerate edge
     # cases (balanced not splitting, load OOM during quantization,
     # dispatch not attaching the top-level _hf_hook, layer_scalar
     # dropped from the map), so the split is abandoned.
-    device_map="auto",
+    device_map={"": 0},
     # MUST stay eager: Gemma4AudioModel (part of the full multimodal
     # Gemma4ForConditionalGeneration checkpoint) does not support SDPA —
     # transformers raises ValueError and tells you to use eager instead
@@ -194,6 +199,13 @@ total = sum(p.numel() for p in model.parameters())
 print("model loaded:", load_from)
 print(f"first param dtype: {first.dtype}, total params: {total / 1e9:.2f}B")
 print("quantization_config:", getattr(model.config, "quantization_config", None))
+# Dispatch check (28 Nov _hf_hook fix): with a single-device map
+# accelerate attaches NO hooks, so the top-level module must NOT have
+# a wrapped forward / _hf_hook. If "has _hf_hook" prints True, STOP —
+# do not call generate(). Expected: False, {'': 0}, cuda:0.
+print("has _hf_hook:", hasattr(model, "_hf_hook"))
+print("hf_device_map:", getattr(model, "hf_device_map", None))
+print("model.device:", model.device)
 for i in range(torch.cuda.device_count()):
     print(
         f"GPU {i} after load: "
